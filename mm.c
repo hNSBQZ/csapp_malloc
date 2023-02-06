@@ -63,10 +63,21 @@ team_t team = {
 #define HDRP(bp) ((char*)(bp) - WSIZE)
 #define FTRP(bp) ((char*)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
+#define SET_PRED(bp,addr) ((*(unsigned int *)(bp)) = (addr))
+#define SET_SUCC(bp,addr) ((*((unsigned int *)(bp)+1))=(addr))
+#define SET_HEAD(head,addr) ((*(unsigned int *)(head)) = (addr))
+
+#define GET_PRED(bp) (*(unsigned int *)(bp))
+#define GET_HEAD(head) (*(unsigned int *)(head))
+#define GET_SUCC(bp) (*((unsigned int *)(bp)+1))
+
 #define NEXT_BLKP(bp) ((char*)(bp) + GET_SIZE(((char*)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char*)(bp) - GET_SIZE(((char*)(bp) - DSIZE)))
 
 static char *heap_list;
+static void *set_free_list_ptr(void *bp);
+static void delete_free_list_from_head(void *bp);
+static void *get_eqclass_head(size_t size);
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *first_fit(size_t size);
@@ -75,17 +86,23 @@ static void place(void *bp,size_t size);
 /*
  * mm_init - initialize the malloc package.
  */
+/*
+    segregated fit
+    设置到从2的4次方到2的13次方10个等价类
+    每个头一个字
+*/
 int mm_init(void)
 {
-    if((heap_list = mem_sbrk(4*WSIZE)) == (void *)-1)
+    //两个序言块，十个等价类，一个起始块，一个结尾块
+    if((heap_list = mem_sbrk(14*WSIZE)) == (void *)-1)
         return -1;
-    PUT(heap_list, 0);                         
 
-    PUT(heap_list + (1*WSIZE), PACK(DSIZE, 1));    
-    PUT(heap_list + (2*WSIZE), PACK(DSIZE, 1));     
-    PUT(heap_list + (3*WSIZE), PACK(0, 1));         
+    heap_list+=WSIZE;
+    memset(heap_list,0,10*WSIZE);                 
 
-    heap_list += (2*WSIZE);
+    PUT(heap_list + (10*WSIZE), PACK(DSIZE, 1));    
+    PUT(heap_list + (11*WSIZE), PACK(DSIZE, 1));     
+    PUT(heap_list + (12*WSIZE), PACK(0, 1));         
 
     if(extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -102,9 +119,13 @@ void *extend_heap(size_t words)
     if((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
-    PUT(HDRP(bp), PACK(size, 0));           
+    PUT(HDRP(bp), PACK(size, 0));            
     PUT(FTRP(bp), PACK(size, 0));           
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));   
+
+    //初始化空闲链表前后地址
+    SET_PRED(bp,NULL);
+    SET_SUCC(bp,NULL);
 
     return coalesce(bp);
 }
@@ -114,6 +135,10 @@ void *coalesce(void *bp)
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));  
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));     
     size_t size = GET_SIZE(HDRP(bp));                      
+
+    //从链表中删除要合并的空闲块
+    delete_free_list_from_head(NEXT_BLKP(bp));
+    delete_free_list_from_head(PREV_BLKP(bp));
 
     if(prev_alloc && next_alloc){
         return bp;
@@ -137,9 +162,77 @@ void *coalesce(void *bp)
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
+
+    //处理链表
+    set_free_list_ptr(bp);
+
     return bp;
 }
 
+/*
+    获取对应等价类空闲链表的头指针
+    把条件都列出来脑子清楚点
+*/
+void *get_eqclass_head(size_t size)
+{
+    if(size==16)
+        return heap_list;
+    if(size>16&&size<=32)
+        return heap_list+1*WSIZE;
+    if(size>32&&size<=64)
+        return heap_list+2*WSIZE;
+    if(size>64&&size<=128)
+        return heap_list+3*WSIZE;
+    if(size>128&&size<=256)
+        return heap_list+4*WSIZE;
+    if(size>256&&size<=512)
+        return heap_list+5*WSIZE;
+    if(size>512&&size<=1024)
+        return heap_list+6*WSIZE;
+    if(size>1024&&size<=2048)
+        return heap_list+7*WSIZE;
+    if(size>2048&&size<=4096)
+        return heap_list+8*WSIZE;
+    return heap_list+9*WSIZE;
+}
+
+/*
+    更新空余块的时候需要将他从空闲链表中删除
+*/
+void delete_free_list_from_head(void *bp)
+{
+    if(bp==NULL)
+        return;
+    //被分配了
+    if(GET_ALLOC(HDRP(bp)))
+        return;
+    size_t size=GET_SIZE(HDRP(bp));
+    void* head_ptr=get_eqclass_head(size);
+    void* cur=GET_HEAD(head_ptr);
+    while(cur!=NULL)
+    {
+        //找到了
+        if(cur==bp){
+            SET_SUCC(GET_PRED(bp),GET_SUCC(bp));
+            return;
+        }
+        cur=GET_SUCC(cur);
+    }
+}
+
+/*
+    设置空闲块指针
+*/
+void *set_free_list_ptr(void *bp)
+{
+    //获取size
+    size_t size=GET_SIZE(HDRP(bp));
+    //头插法
+    void* head_ptr=get_eqclass_head(size);
+    SET_SUCC(bp,GET_HEAD(head_ptr));
+    SET_PRED(bp,head_ptr);
+    return;
+}
 /*
  * mm_free - Freeing a block does nothing.
  */
