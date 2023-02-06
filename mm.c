@@ -80,8 +80,7 @@ static void delete_free_list_from_head(void *bp);
 static void *get_eqclass_head(size_t size);
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
-static void *first_fit(size_t size);
-static void *best_fit(size_t size);
+static void *segregated_fit(size_t size);
 static void place(void *bp,size_t size);
 /*
  * mm_init - initialize the malloc package.
@@ -98,7 +97,9 @@ int mm_init(void)
         return -1;
 
     heap_list+=WSIZE;
-    memset(heap_list,0,10*WSIZE);                 
+    for(int i = 0; i < 10; i++){
+        PUT(heap_list + i*WSIZE, NULL);
+    }               
 
     PUT(heap_list + (10*WSIZE), PACK(DSIZE, 1));    
     PUT(heap_list + (11*WSIZE), PACK(DSIZE, 1));     
@@ -247,38 +248,27 @@ void mm_free(void *ptr)
     coalesce(ptr);
 }
 
-void *first_fit(size_t size)
+void *segregated_fit(size_t size)
 {
     void *bp;
-    for(bp=heap_list;GET_SIZE(HDRP(bp))>0;bp=NEXT_BLKP(bp))
+    void *head_ptr=get_eqclass_head(size);
+    while(head_ptr!=heap_list+10*WSIZE)
     {
-        if((GET_SIZE(HDRP(bp))>=size)&&(!GET_ALLOC(HDRP(bp))))
-            return bp;
+        for(bp=GET_HEAD(head_ptr);bp!=NULL;bp=GET_SUCC(bp))
+        {
+            if(GET_SIZE(HDRP(bp))>size)
+                return bp;
+        }
+        //下一个更大类
+        head_ptr+=WSIZE;
     }
     return NULL;
 }
 
-void *best_fit(size_t size)
-{
-    void *bp;
-    void *best_bp=NULL;
-    size_t min_size=0;
-    for(bp=heap_list;GET_SIZE(HDRP(bp))>0;bp=NEXT_BLKP(bp))
-    {
-        if((GET_SIZE(HDRP(bp))>=size)&&(!GET_ALLOC(HDRP(bp))))
-        {
-            if(min_size > GET_SIZE(HDRP(bp))||min_size ==0)
-            {
-                best_bp=bp;
-                min_size=GET_SIZE(HDRP(bp));
-            }
-        }
-    }
-    return best_bp;
-}
 
 void place(void *bp,size_t size)
 {
+    delete_free_list_from_head(bp);
     size_t origin_size = GET_SIZE(HDRP(bp));
     if((origin_size - size) >= 2*DSIZE) {
         PUT(HDRP(bp), PACK(size, 1));
@@ -286,6 +276,10 @@ void place(void *bp,size_t size)
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(origin_size - size, 0));
         PUT(FTRP(bp), PACK(origin_size - size, 0));
+            //初始化空闲链表前后地址
+        SET_PRED(bp,NULL);
+        SET_SUCC(bp,NULL);
+        coalesce(bp);
     }
     else{
         PUT(HDRP(bp), PACK(origin_size, 1));
@@ -309,7 +303,7 @@ void *mm_malloc(size_t size)
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
 
-    if((bp = best_fit(asize)) != NULL){
+    if((bp = segregated_fit(asize)) != NULL){
         place(bp, asize);
         return bp;
     }
