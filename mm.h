@@ -4,7 +4,9 @@ extern int mm_init (void);
 extern void *mm_malloc (size_t size);
 extern void mm_free (void *ptr);
 extern void *mm_realloc(void *ptr, size_t size);
-
+extern void printf_head();
+extern void *get_heap_list();
+extern void printf_bp(void*);
 
 /* 
  * Students work in teams of one or two.  Teams enter their team name, 

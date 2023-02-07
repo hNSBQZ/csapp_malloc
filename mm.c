@@ -113,6 +113,7 @@ int mm_init(void)
 
 void *extend_heap(size_t words)
 {
+    // printf("extend heap\n");
     char *bp;
     size_t size;
     size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
@@ -133,6 +134,8 @@ void *extend_heap(size_t words)
 
 void *coalesce(void *bp)
 {
+    // printf("coalesce\n");
+    // printf_bp(bp);
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));  
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));     
     size_t size = GET_SIZE(HDRP(bp));                      
@@ -142,6 +145,7 @@ void *coalesce(void *bp)
     delete_free_list_from_head(PREV_BLKP(bp));
 
     if(prev_alloc && next_alloc){
+        set_free_list_ptr(bp);
         return bp;
     }
 
@@ -202,7 +206,9 @@ void *get_eqclass_head(size_t size)
 */
 void delete_free_list_from_head(void *bp)
 {
-    if(bp==NULL)
+    // printf("delete\n");
+    // printf_bp(bp);
+    if(GET_PRED(bp)==NULL&&GET_SUCC(bp)==NULL)
         return;
     //被分配了
     if(GET_ALLOC(HDRP(bp)))
@@ -210,11 +216,17 @@ void delete_free_list_from_head(void *bp)
     size_t size=GET_SIZE(HDRP(bp));
     void* head_ptr=get_eqclass_head(size);
     void* cur=GET_HEAD(head_ptr);
+    if(cur==bp)
+    {
+        SET_HEAD(head_ptr,GET_SUCC(bp));
+        return;
+    }
     while(cur!=NULL)
     {
         //找到了
         if(cur==bp){
-            SET_SUCC(GET_PRED(bp),GET_SUCC(bp));
+            void *pre=GET_PRED(bp);
+            SET_SUCC(pre,GET_SUCC(bp));
             return;
         }
         cur=GET_SUCC(cur);
@@ -226,12 +238,15 @@ void delete_free_list_from_head(void *bp)
 */
 void *set_free_list_ptr(void *bp)
 {
+    // printf("insert\n");
+    // printf_bp(bp);
     //获取size
     size_t size=GET_SIZE(HDRP(bp));
     //头插法
     void* head_ptr=get_eqclass_head(size);
     SET_SUCC(bp,GET_HEAD(head_ptr));
     SET_PRED(bp,head_ptr);
+    SET_HEAD(head_ptr,bp);
     return;
 }
 /*
@@ -239,7 +254,9 @@ void *set_free_list_ptr(void *bp)
  */
 void mm_free(void *ptr)
 {
-    if(ptr==0)
+    // printf("free\n");
+    // printf_bp(ptr);
+    if(ptr==NULL)
         return;
     size_t size = GET_SIZE(HDRP(ptr));
 
@@ -250,36 +267,44 @@ void mm_free(void *ptr)
 
 void *segregated_fit(size_t size)
 {
+    printf("fit\n");
     void *bp;
     void *head_ptr=get_eqclass_head(size);
-    while(head_ptr!=heap_list+10*WSIZE)
+    while(head_ptr<heap_list+10*WSIZE)
     {
         for(bp=GET_HEAD(head_ptr);bp!=NULL;bp=GET_SUCC(bp))
         {
             if(GET_SIZE(HDRP(bp))>size)
+            {
                 return bp;
+            }
         }
         //下一个更大类
         head_ptr+=WSIZE;
     }
+    printf("not found\n");
     return NULL;
 }
 
 
 void place(void *bp,size_t size)
 {
+    printf("place\n");
+    printf_bp(bp);
+    printf("size:%x\n",size);
     delete_free_list_from_head(bp);
     size_t origin_size = GET_SIZE(HDRP(bp));
     if((origin_size - size) >= 2*DSIZE) {
         PUT(HDRP(bp), PACK(size, 1));
         PUT(FTRP(bp), PACK(size, 1));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(origin_size - size, 0));
-        PUT(FTRP(bp), PACK(origin_size - size, 0));
+        
+        PUT(HDRP(NEXT_BLKP(bp)), PACK(origin_size - size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(origin_size - size, 0));
             //初始化空闲链表前后地址
-        SET_PRED(bp,NULL);
-        SET_SUCC(bp,NULL);
-        coalesce(bp);
+        SET_PRED(NEXT_BLKP(bp),NULL);
+        SET_SUCC(NEXT_BLKP(bp),NULL);
+        printf_bp(NEXT_BLKP(bp));
+        set_free_list_ptr(NEXT_BLKP(bp));
     }
     else{
         PUT(HDRP(bp), PACK(origin_size, 1));
@@ -293,6 +318,7 @@ void place(void *bp,size_t size)
  */
 void *mm_malloc(size_t size)
 {
+    // printf("malloc\n");
     size_t asize;
     size_t extendsize;
     char *bp;
@@ -311,6 +337,7 @@ void *mm_malloc(size_t size)
     extendsize = MAX(asize, CHUNKSIZE);
     if((bp = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
+    printf_head();
     place(bp, asize);
     return bp;
 }
@@ -334,9 +361,39 @@ void *mm_realloc(void *ptr, size_t size)
     return new_ptr;
 }
 
+/**
+ * 用来debug的一些函数
+ * 
+*/
+void printf_head()
+{
+    printf("head\n");
+    for(int i=0;i<10;i++)
+    {
+        printf("%x,%x\n",GET_HEAD(heap_list+i*WSIZE),heap_list+i*WSIZE);
+        if(GET_HEAD(heap_list+i*WSIZE)!=0)
+            printf_bp(GET_HEAD(heap_list+i*WSIZE));
+    }
+}
 
+void *get_heap_list()
+{
+    return heap_list;
+}
 
+void printf_bp(void *bp)
+{
+    printf("print bp\n");
+    printf("addr:%x,size:%x,pred:%x,succ:%x\n",bp,GET_SIZE(HDRP(bp)),GET_PRED(bp),GET_SUCC(bp));
+}
 
+/**
+ * 创建自测样例
+*/
+void test_coalesce()
+{
+    
+}
 
 
 
